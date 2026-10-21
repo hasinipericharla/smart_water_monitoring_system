@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Droplets, Cloud, Gauge, Download } from 'lucide-react';
 import { PARAMS, TANK } from '../config.js';
 import { getReadings } from '../utils/mockData.js';
@@ -9,9 +9,22 @@ import SensorCard from '../components/SensorCard.jsx';
 import WaterCalendar from '../components/WaterCalendar.jsx';
 import DailyReadingsModal from '../components/DailyReadingsModal.jsx';
 import TrendChart from '../components/TrendChart.jsx';
+import { getESP32Readings } from '../esp32Service.js';
 
 export default function Overview({ hostel }) {
   const readings = getReadings(hostel.id);
+  useEffect(() => {
+  async function testESP32Connection() {
+    try {
+      const data = await getESP32Readings();
+      console.log('ESP32 DATA:', data);
+    } catch (error) {
+      console.error('ESP32 CONNECTION ERROR:', error);
+    }
+  }
+
+  testESP32Connection();
+}, []);
   const [sel, setSel] = useState(null);
   const [open, setOpen] = useState(false);
   const lv = latestValid(readings, 'level');
