@@ -12,19 +12,66 @@ import TrendChart from '../components/TrendChart.jsx';
 import { getESP32Readings } from '../esp32Service.js';
 
 export default function Overview({ hostel }) {
-  const readings = getReadings(hostel.id);
-  useEffect(() => {
-  async function testESP32Connection() {
-    try {
-      const data = await getESP32Readings();
-      console.log('ESP32 DATA:', data);
-    } catch (error) {
-      console.error('ESP32 CONNECTION ERROR:', error);
-    }
-  }
+  const [readings, setReadings] = useState([]);
+  const [connectionStatus, setConnectionStatus] = useState('Connecting');
 
-  testESP32Connection();
-}, []);
+  useEffect(() => {
+    let active = true;
+
+    async function fetchReadings() {
+      try {
+        const data = await getESP32Readings();
+
+        if (!active) return;
+
+        // const reading = {
+        //   ts: Date.now(),
+        //   level: data.waterLevel >= 0 ? data.waterLevel : null,
+        //   turb: null,
+        //   tds: null,
+        //   valid: true,
+        //   quality: 'unknown',
+        // };
+        const reading = {
+  ts: Date.now(),
+
+  level:
+    data.waterLevel >= 0
+      ? data.waterLevel
+      : null,
+
+  turb: null,
+  tds: null,
+
+  turbidityADC: data.turbidityADC,
+  turbidityVoltage: data.turbidityVoltage,
+  tdsADC: data.tdsADC,
+  tdsVoltage: data.tdsVoltage,
+
+  valid: true,
+  quality: 'unknown',
+};
+
+        setReadings((previous) => {
+          const updated = [...previous, reading];
+          return updated.slice(-100);
+        });
+
+        setConnectionStatus('Connected');
+      } catch (error) {
+        console.error('ESP32 connection error:', error);
+        if (active) setConnectionStatus('Disconnected');
+      }
+    }
+
+    fetchReadings();
+    const timer = setInterval(fetchReadings, 5000);
+
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, []);
   const [sel, setSel] = useState(null);
   const [open, setOpen] = useState(false);
   const lv = latestValid(readings, 'level');
@@ -47,6 +94,9 @@ export default function Overview({ hostel }) {
 
   return (
     <>
+       <div className="muted small">
+  ESP32 status: <b>{connectionStatus}</b>
+</div>
       <div className="top-grid">
         <div className="cards3">
           <SensorCard param="level" icon={Droplets} reading={lv}
