@@ -32,19 +32,23 @@ export default function Overview({ hostel }) {
         //   valid: true,
         //   quality: 'unknown',
         // };
-        const reading = {
+const reading = {
   ts: Date.now(),
 
-  level:
-    data.waterLevel >= 0
-      ? data.waterLevel
-      : null,
+  level: data.waterLevel >= 0 ? data.waterLevel : null,
 
-  turb: null,
-  tds: null,
+  // Temporary display of raw ADC readings.
+  turb: Number.isFinite(data.turbidityADC)
+    ? data.turbidityADC
+    : null,
+
+  tds: Number.isFinite(data.tdsADC)
+    ? data.tdsADC
+    : null,
 
   turbidityADC: data.turbidityADC,
   turbidityVoltage: data.turbidityVoltage,
+
   tdsADC: data.tdsADC,
   tdsVoltage: data.tdsVoltage,
 
