@@ -1,5 +1,5 @@
 // Talks to the backend. The session (user + JWT token) is kept in this browser's localStorage.
-const BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+const BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8001';
 const SESSION = 'swm_session';
 
 export const currentUser = () => { const s = JSON.parse(localStorage.getItem(SESSION) || 'null'); return s?.token ? s : null; };
