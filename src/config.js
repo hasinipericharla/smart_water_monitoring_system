@@ -18,7 +18,7 @@ export const THRESHOLDS = {
 };
 
 export const STALE_MINUTES = 60; // readings older than this are shown gray
-export const GAP_MINUTES = 90; // graph line breaks across gaps longer than this
+export const GAP_MINUTES = 10; // graph line breaks across gaps longer than this
 
 export const PARAMS = {
   level: { label: 'Water Level', unit: '%', dec: 0 },

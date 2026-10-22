@@ -192,9 +192,14 @@ import SensorCard from '../components/SensorCard.jsx';
 import WaterCalendar from '../components/WaterCalendar.jsx';
 import DailyReadingsModal from '../components/DailyReadingsModal.jsx';
 import TrendChart from '../components/TrendChart.jsx';
-import { getESP32Readings } from '../esp32Service.js';
+import { getESP32Readings,saveReading, } from '../esp32Service.js';
+import { useRef } from 'react';
 
 export default function Overview({ hostel }) {
+  // const lastSavedRef = useRef(0);
+  const lastSavedRef = useRef(
+  Number(localStorage.getItem(`lastSaved_${hostel.id}`)) || 0
+);
   const [readings, setReadings] = useState([]);
   const [connectionStatus, setConnectionStatus] = useState('Connecting');
 
@@ -202,52 +207,143 @@ export default function Overview({ hostel }) {
   useEffect(() => {
     let active = true;
 
-    async function fetchReadings() {
+//     async function fetchReadings() {
+//       try {
+//         const data = await getESP32Readings();
+
+//         const now = Date.now();
+
+//         if (now - lastSavedRef.current >= 5 * 60 * 1000) {
+//   await saveReading({
+//     device_id: 'ESP32_01',
+//     hostel_id: hostel.id,
+//     tank_id: 'T1',
+//     distance_cm: data.distanceCm,
+//     tank_height_cm: 200,
+//     full_offset_cm: 0,
+//     tds_adc: data.tdsADC,
+//     turbidity_adc: data.turbidityADC,
+//     tds_voltage: data.tdsVoltage,
+//     turbidity_voltage: data.turbidityVoltage,
+//   });
+
+//   lastSavedRef.current = now;
+// }
+
+//         if (!active) return;
+
+//         const reading = {
+//           ts: Date.now(),
+
+//           level:
+//             Number.isFinite(data.waterLevel) && data.waterLevel >= 0
+//               ? data.waterLevel
+//               : null,
+
+//           // Temporary display of raw ADC readings
+//           turb: Number.isFinite(data.turbidityADC)
+//             ? data.turbidityADC
+//             : null,
+
+//           tds: Number.isFinite(data.tdsADC)
+//             ? data.tdsADC
+//             : null,
+
+//           turbidityADC: data.turbidityADC,
+//           turbidityVoltage: data.turbidityVoltage,
+
+//           tdsADC: data.tdsADC,
+//           tdsVoltage: data.tdsVoltage,
+
+//           valid: true,
+//           quality: 'unknown',
+//         };
+
+//         setReadings((previous) => {
+//           return [...previous, reading].slice(-100);
+//         });
+
+//         setConnectionStatus('Connected');
+//       } catch (error) {
+//         console.error('ESP32 connection error:', error);
+
+//         if (active) {
+//           setConnectionStatus('Disconnected');
+//         }
+//       }
+//     }
+async function fetchReadings() {
+  try {
+    const data = await getESP32Readings();
+
+    if (!active) return;
+
+    // Update the dashboard using live ESP32 readings.
+    const reading = {
+      ts: Date.now(),
+      level:
+        Number.isFinite(data.waterLevel) && data.waterLevel >= 0
+          ? data.waterLevel
+          : null,
+      turb: Number.isFinite(data.turbidityADC)
+        ? data.turbidityADC
+        : null,
+      tds: Number.isFinite(data.tdsADC)
+        ? data.tdsADC
+        : null,
+      turbidityADC: data.turbidityADC,
+      turbidityVoltage: data.turbidityVoltage,
+      tdsADC: data.tdsADC,
+      tdsVoltage: data.tdsVoltage,
+      valid: true,
+      quality: 'unknown',
+    };
+
+    setReadings((previous) => [...previous, reading].slice(-100));
+    setConnectionStatus('Connected');
+
+    // Save the first reading immediately, then every 5 minutes.
+    const now = Date.now();
+
+    if (now - lastSavedRef.current >= 5 * 60 * 1000) {
       try {
-        const data = await getESP32Readings();
-
-        if (!active) return;
-
-        const reading = {
-          ts: Date.now(),
-
-          level:
-            Number.isFinite(data.waterLevel) && data.waterLevel >= 0
-              ? data.waterLevel
-              : null,
-
-          // Temporary display of raw ADC readings
-          turb: Number.isFinite(data.turbidityADC)
-            ? data.turbidityADC
-            : null,
-
-          tds: Number.isFinite(data.tdsADC)
-            ? data.tdsADC
-            : null,
-
-          turbidityADC: data.turbidityADC,
-          turbidityVoltage: data.turbidityVoltage,
-
-          tdsADC: data.tdsADC,
-          tdsVoltage: data.tdsVoltage,
-
-          valid: true,
-          quality: 'unknown',
-        };
-
-        setReadings((previous) => {
-          return [...previous, reading].slice(-100);
+        await saveReading({
+          device_id: 'ESP32_01',
+          hostel_id: hostel.id,
+          tank_id: 'T1',
+          distance_cm: data.distanceCm,
+          tank_height_cm: 200,
+          full_offset_cm: 0,
+          tds_adc: data.tdsADC,
+          turbidity_adc: data.turbidityADC,
+          tds_voltage: data.tdsVoltage,
+          turbidity_voltage: data.turbidityVoltage,
         });
 
-        setConnectionStatus('Connected');
-      } catch (error) {
-        console.error('ESP32 connection error:', error);
+        // lastSavedRef.current = Date.now();
+        // console.log('Reading saved to database.');
+        lastSavedRef.current = Date.now();
 
-        if (active) {
-          setConnectionStatus('Disconnected');
-        }
+localStorage.setItem(
+  `lastSaved_${hostel.id}`,
+  String(lastSavedRef.current)
+);
+
+console.log('Reading saved to database.');
+      } catch (saveError) {
+        console.error('Failed to save reading to database:', saveError);
       }
     }
+  } catch (error) {
+    console.error('ESP32 connection error:', error);
+
+    if (active) {
+      setConnectionStatus('Disconnected');
+    }
+  }
+}
+
+
 
     fetchReadings();
 

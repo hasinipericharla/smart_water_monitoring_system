@@ -41,6 +41,14 @@ class Reading(BaseModel):
     tds_ppm: float | None = None
     turbidity_ntu: float | None = None
 
+    # Raw analog readings from ESP32
+    tds_adc: int | None = None 
+    turbidity_adc: int | None = None
+
+    # Raw sensor voltages
+    tds_voltage: float | None = None 
+    turbidity_voltage: float | None = None
+
 
 class Person(BaseModel):
     id: str
@@ -158,15 +166,50 @@ def put_recipients(people: list[Person], user: dict = Depends(current_user)):
     return {"saved": len(people)}
 
 
-@app.post("/api/readings")  # called by the ESP board, not by users: protected by the device key
+# @app.post("/api/readings")  # called by the ESP board, not by users: protected by the device key
+# def ingest(p: Reading, x_api_key: str | None = Header(None)):
+#     if DEVICE_KEY and x_api_key != DEVICE_KEY:
+#         raise HTTPException(401, "Invalid device key")
+#     r = {"ts": datetime.now(timezone.utc), "hostel_id": p.hostel_id, "tank_id": p.tank_id, "device_id": p.device_id,
+#          "level": level_pct(p.tank_height_cm, p.distance_cm, p.full_offset_cm), "tds": p.tds_ppm, "turb": p.turbidity_ntu}
+#     r["valid"] = r["level"] is not None
+#     db.readings.insert_one(dict(r))  # copy: insert_one adds _id to the dict it receives
+#     return {**with_iso(r), "alerts_triggered": evaluate(r)}
+
+@app.post("/api/readings")
 def ingest(p: Reading, x_api_key: str | None = Header(None)):
     if DEVICE_KEY and x_api_key != DEVICE_KEY:
         raise HTTPException(401, "Invalid device key")
-    r = {"ts": datetime.now(timezone.utc), "hostel_id": p.hostel_id, "tank_id": p.tank_id, "device_id": p.device_id,
-         "level": level_pct(p.tank_height_cm, p.distance_cm, p.full_offset_cm), "tds": p.tds_ppm, "turb": p.turbidity_ntu}
+
+    r = {
+        "ts": datetime.now(timezone.utc),
+        "hostel_id": p.hostel_id,
+        "tank_id": p.tank_id,
+        "device_id": p.device_id,
+        "distance_cm": p.distance_cm,
+        "level": level_pct(
+            p.tank_height_cm,
+            p.distance_cm,
+            p.full_offset_cm
+        ),
+        "tds": p.tds_ppm,
+        "turb": p.turbidity_ntu,
+        "tds_adc": p.tds_adc,
+        "turbidity_adc": p.turbidity_adc,
+        "tds_voltage": p.tds_voltage,
+        "turbidity_voltage": p.turbidity_voltage,
+    }
+
     r["valid"] = r["level"] is not None
-    db.readings.insert_one(dict(r))  # copy: insert_one adds _id to the dict it receives
-    return {**with_iso(r), "alerts_triggered": evaluate(r)}
+
+    db.readings.insert_one(dict(r))
+
+    return {
+        **with_iso(r),
+        "alerts_triggered": evaluate(r)
+    }
+
+
 
 
 @app.get("/api/hostels/{hostel_id}/readings")
