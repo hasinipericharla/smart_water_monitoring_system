@@ -1,19 +1,22 @@
-// DEMO MODE: accounts live in this browser's localStorage (password kept only as a SHA-256 hash).
-// Replace with backend auth (argon2/bcrypt + JWT/session cookie + server-side role checks) for production.
-const KEY = 'swm_users', SESSION = 'swm_session';
-const sha = async (s) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)))].map((x) => x.toString(16).padStart(2, '0')).join('');
-const users = () => JSON.parse(localStorage.getItem(KEY) || '[]');
-export const currentUser = () => JSON.parse(localStorage.getItem(SESSION) || 'null');
+// Talks to the backend. The session (user + JWT token) is kept in this browser's localStorage.
+const BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+const SESSION = 'swm_session';
+
+export const currentUser = () => { const s = JSON.parse(localStorage.getItem(SESSION) || 'null'); return s?.token ? s : null; };
+export const getToken = () => currentUser()?.token || null;
 export const logout = () => localStorage.removeItem(SESSION);
-export async function signup({ name, email, phone, password }) {
-  if (users().some((u) => u.email.toLowerCase() === email.toLowerCase())) throw new Error('An account with this email already exists.');
-  const u = { name, email, phone, role: 'warden', hash: await sha(password) };
-  localStorage.setItem(KEY, JSON.stringify([...users(), u]));
-  return start(u);
+
+async function post(path, body) {
+  let res;
+  try { res = await fetch(BASE + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
+  catch { throw new Error('Cannot reach the server. Is the backend running?'); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Please check the details you entered.');
+  return data;
 }
-export async function login(id, password) {
-  const u = users().find((x) => x.email.toLowerCase() === id.toLowerCase() || x.name.toLowerCase() === id.toLowerCase());
-  if (!u || u.hash !== (await sha(password))) throw new Error('Incorrect email/username or password.');
-  return start(u);
-}
-function start(u) { const s = { name: u.name, email: u.email, role: u.role }; localStorage.setItem(SESSION, JSON.stringify(s)); return s; }
+const save = ({ token, user }) => { const s = { ...user, token }; localStorage.setItem(SESSION, JSON.stringify(s)); return s; };
+
+export const signup = ({ name, email, phone, password }) => post('/api/auth/signup', { name, email, phone: phone.replace(/[\s-]/g, ''), password });
+export const resendOtp = (email) => post('/api/auth/resend-otp', { email });
+export const verifyOtp = async (email, otp) => save(await post('/api/auth/verify-otp', { email, otp }));
+export const login = async (email, password) => save(await post('/api/auth/login', { email, password }));

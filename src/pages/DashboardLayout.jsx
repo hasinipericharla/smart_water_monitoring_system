@@ -26,11 +26,10 @@ export default function DashboardLayout({ user, hostel, onChangeHostel, onLogout
       <main className="content">
         <header className="topbar">
           <div><h1>{hostel.id} <small>{hostel.category}</small></h1><p className="muted">{user.name}</p></div>
-          <div className="row"><span className="badge">Simulated data</span><button className="btn" onClick={onChangeHostel}>Change hostel</button></div>
+          <div className="row"><span className="badge">Live data</span><button className="btn" onClick={onChangeHostel}>Change hostel</button></div>
         </header>
         {page === 'overview' && <Overview hostel={hostel} />}
-        {/* {page === 'alerts' && <AlertRecipients hostel={hostel} />} */}
-        {page === 'alerts' && <AlertRecipients hostel={hostel} user={user} />}
+        {page === 'alerts' && <AlertRecipients hostel={hostel} />}
         {page === 'weekly' && <WeeklyReport hostel={hostel} />}
       </main>
     </div>

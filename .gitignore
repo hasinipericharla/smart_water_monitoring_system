@@ -1,2 +1,12 @@
 node_modules
 dist
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+venv/
+__pycache__/
+*.pyc

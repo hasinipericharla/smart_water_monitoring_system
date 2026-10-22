@@ -1,75 +1,115 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Droplets, Eye, EyeOff } from 'lucide-react';
-import { login, signup } from '../utils/auth.js';
+import { login, resendOtp, signup, verifyOtp } from '../utils/auth.js';
 
 export default function LoginSignup({ onAuth }) {
-  const [mode, setMode] = useState('login');
-  const [f, setF] = useState({ id: '', name: '', email: '', phone: '', password: '', confirm: '' });
+  const [mode, setMode] = useState('login'); // login | signup | otp
+  const [f, setF] = useState({ name: '', email: '', phone: '', password: '', confirm: '', otp: '' });
   const [show, setShow] = useState(false);
   const [err, setErr] = useState({});
+  const [info, setInfo] = useState('');
   const [busy, setBusy] = useState(false);
-  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const [wait, setWait] = useState(0); // seconds until "Resend code" is allowed
+  useEffect(() => { if (wait > 0) { const t = setTimeout(() => setWait(wait - 1), 1000); return () => clearTimeout(t); } }, [wait]);
 
-  const validate = () => {
-    const e = {};
-    if (mode === 'login') {
-      if (!f.id.trim()) e.id = 'Enter your email or username.';
-      if (!f.password) e.password = 'Enter your password.';
-    } else {
-      if (!f.name.trim()) e.name = 'Enter your full name.';
-      if (!/^\S+@\S+\.\S+$/.test(f.email)) e.email = 'Enter a valid email address.';
-      if (!/^\+?\d{10,13}$/.test(f.phone.replace(/[\s-]/g, ''))) e.phone = 'Enter a phone number with 10–13 digits.';
-      if (f.password.length < 8) e.password = 'Use at least 8 characters.';
-      if (f.confirm !== f.password) e.confirm = 'Passwords do not match.';
-    }
-    return e;
-  };
-  const submit = async (ev) => {
-    ev.preventDefault();
-    const e = validate(); setErr(e);
-    if (Object.keys(e).length) return;
-    setBusy(true);
-    try { onAuth(mode === 'login' ? await login(f.id.trim(), f.password) : await signup({ ...f, name: f.name.trim() })); }
-    catch (x) { setErr({ form: x.message }); }
-    setBusy(false);
-  };
-  const Field = ({ k, label, type = 'text', ...rest }) => (
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const go = (m) => { setMode(m); setErr({}); setInfo(''); };
+  // Called as a function (not used as a <Component/>) so inputs keep focus while typing.
+  const field = (k, label, type = 'text', extra = {}) => (
     <label className="field"><span>{label}</span>
-      <input type={type} value={f[k]} onChange={set(k)} aria-invalid={!!err[k]} {...rest} />
+      <input type={type} value={f[k]} onChange={set(k)} aria-invalid={!!err[k]} {...extra} />
       {err[k] && <em className="err">{err[k]}</em>}
     </label>
   );
+
+  const validate = () => {
+    const e = {};
+    const okEmail = /^\S+@\S+\.\S+$/.test(f.email.trim());
+    if (mode === 'login') {
+      if (!okEmail) e.email = 'Enter a valid email address.';
+      if (!f.password) e.password = 'Enter your password.';
+    } else if (mode === 'signup') {
+      if (f.name.trim().length < 2) e.name = 'Enter your full name.';
+      if (!okEmail) e.email = 'Enter a valid email address.';
+      if (!/^\+?\d{10,13}$/.test(f.phone.replace(/[\s-]/g, ''))) e.phone = 'Enter a phone number with 10–13 digits.';
+      if (f.password.length < 8) e.password = 'Use at least 8 characters.';
+      if (f.confirm !== f.password) e.confirm = 'Passwords do not match.';
+    } else if (!/^\d{6}$/.test(f.otp)) e.otp = 'Enter the 6-digit code.';
+    return e;
+  };
+
+  const submit = async (ev) => {
+    ev.preventDefault();
+    const e = validate(); setErr(e); setInfo('');
+    if (Object.keys(e).length) return;
+    setBusy(true);
+    try {
+      const email = f.email.trim();
+      if (mode === 'login') onAuth(await login(email, f.password));
+      else if (mode === 'signup') { const r = await signup({ name: f.name.trim(), email, phone: f.phone, password: f.password }); setInfo(r.message); setWait(60); setMode('otp'); }
+      else onAuth(await verifyOtp(email, f.otp));
+    } catch (x) { setErr({ form: x.message }); }
+    setBusy(false);
+  };
+  const resend = async () => {
+    setErr({}); setBusy(true);
+    try { const r = await resendOtp(f.email.trim()); setInfo(r.message); setWait(60); } catch (x) { setErr({ form: x.message }); }
+    setBusy(false);
+  };
+
   return (
     <div className="auth-wrap">
       <form className="auth-card" onSubmit={submit} noValidate>
         <div className="brand"><Droplets size={28} /><h1>Smart Water Monitoring</h1></div>
         <p className="muted">Hostel tank level and water-quality monitoring</p>
-        <div className="seg" role="tablist">
-          <button type="button" className={mode === 'login' ? 'on' : ''} onClick={() => { setMode('login'); setErr({}); }}>Log in</button>
-          <button type="button" className={mode === 'signup' ? 'on' : ''} onClick={() => { setMode('signup'); setErr({}); }}>Sign up</button>
-        </div>
-        {mode === 'login' ? <Field k="id" label="Email or username" autoComplete="username" /> : (
+
+        {mode !== 'otp' && (
+          <div className="seg" role="tablist">
+            <button type="button" className={mode === 'login' ? 'on' : ''} onClick={() => go('login')}>Log in</button>
+            <button type="button" className={mode === 'signup' ? 'on' : ''} onClick={() => go('signup')}>Sign up</button>
+          </div>
+        )}
+
+        {mode === 'signup' && <>{field('name', 'Full name')}{field('email', 'Email', 'email')}{field('phone', 'Phone number (for SMS alerts)', 'tel')}</>}
+        {mode === 'login' && field('email', 'Email', 'email', { autoComplete: 'username' })}
+
+        {mode !== 'otp' && (
+          <label className="field"><span>Password</span>
+            <div className="pw">
+              <input type={show ? 'text' : 'password'} value={f.password} onChange={set('password')} aria-invalid={!!err.password} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} />
+              <button type="button" className="icon" aria-label={show ? 'Hide password' : 'Show password'} onClick={() => setShow(!show)}>{show ? <EyeOff size={18} /> : <Eye size={18} />}</button>
+            </div>
+            {err.password && <em className="err">{err.password}</em>}
+          </label>
+        )}
+        {mode === 'signup' && field('confirm', 'Confirm password', show ? 'text' : 'password')}
+
+        {mode === 'otp' && (
           <>
-            <Field k="name" label="Full name" />
-            <Field k="email" label="Email" type="email" />
-            <Field k="phone" label="Phone number (for SMS alerts)" type="tel" />
+            <p>We sent a 6-digit code to <b>{f.email.trim()}</b>. It expires in 10 minutes.</p>
+            <label className="field"><span>Verification code</span>
+              <input value={f.otp} inputMode="numeric" maxLength={6} autoComplete="one-time-code" aria-invalid={!!err.otp}
+                onChange={(e) => setF({ ...f, otp: e.target.value.replace(/\D/g, '') })} />
+              {err.otp && <em className="err">{err.otp}</em>}
+            </label>
           </>
         )}
-        <label className="field"><span>Password</span>
-          <div className="pw">
-            <input type={show ? 'text' : 'password'} value={f.password} onChange={set('password')} aria-invalid={!!err.password} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} />
-            <button type="button" className="icon" aria-label={show ? 'Hide password' : 'Show password'} onClick={() => setShow(!show)}>{show ? <EyeOff size={18} /> : <Eye size={18} />}</button>
-          </div>
-          {err.password && <em className="err">{err.password}</em>}
-        </label>
-        {mode === 'signup' && <Field k="confirm" label="Confirm password" type={show ? 'text' : 'password'} />}
+
+        {info && <div className="banner ok">{info}</div>}
         {err.form && <div className="banner red">{err.form}</div>}
-        <button className="btn primary wide" disabled={busy}>{mode === 'login' ? 'Log in' : 'Create account'}</button>
-        <p className="muted center">
-          {mode === 'login' ? 'New here? ' : 'Already registered? '}
-          <button type="button" className="link" onClick={() => { setMode(mode === 'login' ? 'signup' : 'login'); setErr({}); }}>{mode === 'login' ? 'Create an account' : 'Log in'}</button>
-        </p>
-        <p className="demo-note">Demo mode: accounts are stored in this browser only.</p>
+        <button className="btn primary wide" disabled={busy}>{mode === 'login' ? 'Log in' : mode === 'signup' ? 'Send verification code' : 'Verify and create account'}</button>
+
+        {mode === 'otp' ? (
+          <p className="muted center">
+            <button type="button" className="link" disabled={wait > 0 || busy} onClick={resend}>{wait > 0 ? `Resend code in ${wait}s` : 'Resend code'}</button>
+            {' · '}<button type="button" className="link" onClick={() => go('signup')}>Change details</button>
+          </p>
+        ) : (
+          <p className="muted center">
+            {mode === 'login' ? 'New here? ' : 'Already registered? '}
+            <button type="button" className="link" onClick={() => go(mode === 'login' ? 'signup' : 'login')}>{mode === 'login' ? 'Create an account' : 'Log in'}</button>
+          </p>
+        )}
       </form>
     </div>
   );

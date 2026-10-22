@@ -1,89 +1,32 @@
-# """Minimal backend STUB (Phase 3/4 starting point). Not production-ready:
-# in-memory storage, no auth, SMS is only logged. Run: pip install fastapi uvicorn && uvicorn main:app --reload"""
-# from datetime import datetime, timezone
-# from fastapi import FastAPI
-# from pydantic import BaseModel
-
-# app = FastAPI(title="Smart Water Monitoring API (stub)")
-# @app.get("/")
-# def root():
-#     return {"status": "ok", "docs": "/docs"}
-# THRESHOLDS = {"level_low": 20, "level_high": 80, "tds_upper": None, "turb_upper": None}  # None = not configured
-# READINGS: list[dict] = []
-# ACTIVE_ALERTS: set[tuple[str, str]] = set()  # (tank_id, kind) -> duplicate suppression
-
-
-# class Reading(BaseModel):
-#     device_id: str
-#     hostel_id: str
-#     tank_id: str
-#     distance_cm: float | None = None   # sensor-to-surface distance
-#     tank_height_cm: float = 200
-#     tds_ppm: float | None = None
-#     turbidity_ntu: float | None = None
-
-
-# def level_pct(h: float, d: float | None):
-#     if d is None or d < 0 or d > h * 1.05:
-#         return None  # invalid: flag, never treat as real level
-#     return max(0.0, min(100.0, (h - d) / h * 100))
-
-
-# def send_sms(kind: str, r: dict):
-#     print(f"[SMS-STUB] {kind}: {r['hostel_id']}/{r['tank_id']} level={r['level']} at {r['ts']}")  # swap in gateway; keep keys in env vars
-
-
-# def evaluate(r: dict):
-#     checks = {}
-#     if r["level"] is not None:
-#         checks["low_level"] = r["level"] < THRESHOLDS["level_low"]
-#         checks["high_level"] = r["level"] > THRESHOLDS["level_high"]
-#     if r["tds"] is not None and THRESHOLDS["tds_upper"] is not None:
-#         checks["tds"] = r["tds"] > THRESHOLDS["tds_upper"]
-#     if r["turb"] is not None and THRESHOLDS["turb_upper"] is not None:
-#         checks["turbidity"] = r["turb"] > THRESHOLDS["turb_upper"]
-#     for kind, bad in checks.items():
-#         key = (r["tank_id"], kind)
-#         if bad and key not in ACTIVE_ALERTS:
-#             ACTIVE_ALERTS.add(key); send_sms(kind, r)
-#         elif not bad:
-#             ACTIVE_ALERTS.discard(key)  # recovered: re-arm
-
-
-# @app.post("/api/readings")
-# def ingest(p: Reading):
-#     r = {"ts": datetime.now(timezone.utc).isoformat(), "hostel_id": p.hostel_id, "tank_id": p.tank_id, "device_id": p.device_id,
-#          "level": level_pct(p.tank_height_cm, p.distance_cm), "tds": p.tds_ppm, "turb": p.turbidity_ntu}
-#     r["valid"] = r["level"] is not None
-#     READINGS.append(r); evaluate(r)
-#     return r
-
-
-# @app.get("/api/hostels/{hostel_id}/readings")
-# def list_readings(hostel_id: str, limit: int = 500):
-#     return [r for r in READINGS if r["hostel_id"] == hostel_id][-limit:]
-
-"""Smart Water Monitoring API. Readings are in memory; recipients are saved to recipients.json.
+"""Smart Water Monitoring API. Data (users, readings, recipients, alerts) is stored in MongoDB.
 SMS provider is chosen by env var SMS_PROVIDER: console (default, test only) | fast2sms | twilio."""
-import json, os, time
+import os, time
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from pathlib import Path
 
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-app = FastAPI(title="Smart Water Monitoring API")
+from db import db, init_indexes  # db.py loads backend/.env
+from auth import current_user, router as auth_router
+
+
+@asynccontextmanager
+async def lifespan(app):
+    init_indexes()
+    yield
+
+
+app = FastAPI(title="Smart Water Monitoring API", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allow_methods=["*"], allow_headers=["*"])
+app.include_router(auth_router)
 
 # None = limit not set. TDS/turbidity values below are DEMO placeholders: confirm them for your sensors.
 THRESHOLDS = {"level_low": 20, "level_high": 80, "tds_upper": 500, "tds_lower": None, "turb_upper": 5, "turb_lower": None}
 PROVIDER = os.getenv("SMS_PROVIDER", "console")
-FILE = Path(__file__).with_name("recipients.json")
-READINGS: list[dict] = []
-ALERT_LOG: list[dict] = []
-ACTIVE_ALERTS: set[tuple[str, str, str]] = set()  # (hostel, tank, kind): stops repeat SMS while condition lasts
+DEVICE_KEY = os.getenv("DEVICE_KEY")  # if set, devices must send it in the X-API-Key header
 LAST_STUDENT_SMS: dict[str, float] = {}
 CATEGORY = {"high_level": "highLevel", "low_level": "lowLevel", "tds_high": "tds", "tds_low": "tds", "turb_high": "turb", "turb_low": "turb"}
 
@@ -93,7 +36,8 @@ class Reading(BaseModel):
     hostel_id: str
     tank_id: str
     distance_cm: float | None = None  # sensor-to-water-surface distance
-    tank_height_cm: float = 200
+    tank_height_cm: float = 200  # sensor face to tank bottom
+    full_offset_cm: float = 0  # distance from sensor face down to the full-water line
     tds_ppm: float | None = None
     turbidity_ntu: float | None = None
 
@@ -110,13 +54,13 @@ class Person(BaseModel):
 
 
 def load_people() -> list[dict]:
-    return json.loads(FILE.read_text()) if FILE.exists() else []
+    return list(db.recipients.find({}, {"_id": 0}))
 
 
-def level_pct(h: float, d: float | None):
+def level_pct(h: float, d: float | None, off: float = 0):
     if d is None or d < 0 or d > h * 1.05:
         return None  # impossible reading: flag it, never treat as a real level
-    return max(0.0, min(100.0, (h - d) / h * 100))
+    return max(0.0, min(100.0, (h - d) / (h - off) * 100))
 
 
 def send_sms(phone: str, text: str) -> tuple[bool, str]:
@@ -167,24 +111,38 @@ def alert_text(kind: str, r: dict) -> str:
     }[kind]
 
 
+def is_active(key: str) -> bool:
+    d = db.alert_state.find_one({"_id": key})
+    return bool(d and d.get("active"))
+
+
+def set_active(key: str, v: bool):
+    db.alert_state.update_one({"_id": key}, {"$set": {"active": v}}, upsert=True)
+
+
 def evaluate(r: dict) -> list[str]:
     fired = []
     for kind, bad in conditions(r).items():
-        key = (r["hostel_id"], r["tank_id"], kind)
+        key = f"{r['hostel_id']}|{r['tank_id']}|{kind}"  # state is kept in MongoDB, so a restart does not repeat SMS
         if not bad:
-            ACTIVE_ALERTS.discard(key)  # recovered: re-arm
-        elif key not in ACTIVE_ALERTS:
-            ACTIVE_ALERTS.add(key)
+            if is_active(key):
+                set_active(key, False)  # recovered: re-arm
+        elif not is_active(key):
+            set_active(key, True)
             fired.append(kind)
             text = alert_text(kind, r)
             to = [p for p in load_people() if p["active"] and p["type"] == "warden" and p["hostelId"] == r["hostel_id"] and CATEGORY[kind] in p["alerts"]]
             if not to:
                 print(f"[ALERT {kind}] no active warden for {r['hostel_id']} with this alert enabled; nothing sent")
-                ALERT_LOG.append({"ts": r["ts"], "hostel_id": r["hostel_id"], "kind": kind, "recipient": None, "ok": False, "detail": "no recipients"})
+                db.alerts.insert_one({"ts": r["ts"], "hostel_id": r["hostel_id"], "kind": kind, "recipient": None, "ok": False, "detail": "no recipients"})
             for p in to:
                 ok, detail = send_sms(p["phone"], text)
-                ALERT_LOG.append({"ts": r["ts"], "hostel_id": r["hostel_id"], "kind": kind, "recipient": p["name"], "ok": ok, "detail": detail})
+                db.alerts.insert_one({"ts": r["ts"], "hostel_id": r["hostel_id"], "kind": kind, "recipient": p["name"], "ok": ok, "detail": detail})
     return fired
+
+
+def with_iso(doc: dict) -> dict:
+    return {**doc, "ts": doc["ts"].isoformat()}
 
 
 @app.get("/")
@@ -193,32 +151,37 @@ def root():
 
 
 @app.put("/api/recipients")
-def put_recipients(people: list[Person]):
-    FILE.write_text(json.dumps([p.model_dump() for p in people]))
+def put_recipients(people: list[Person], user: dict = Depends(current_user)):
+    db.recipients.delete_many({})
+    if people:
+        db.recipients.insert_many([p.model_dump() for p in people])
     return {"saved": len(people)}
 
 
-@app.post("/api/readings")
-def ingest(p: Reading):
-    r = {"ts": datetime.now(timezone.utc).isoformat(), "hostel_id": p.hostel_id, "tank_id": p.tank_id, "device_id": p.device_id,
-         "level": level_pct(p.tank_height_cm, p.distance_cm), "tds": p.tds_ppm, "turb": p.turbidity_ntu}
+@app.post("/api/readings")  # called by the ESP board, not by users: protected by the device key
+def ingest(p: Reading, x_api_key: str | None = Header(None)):
+    if DEVICE_KEY and x_api_key != DEVICE_KEY:
+        raise HTTPException(401, "Invalid device key")
+    r = {"ts": datetime.now(timezone.utc), "hostel_id": p.hostel_id, "tank_id": p.tank_id, "device_id": p.device_id,
+         "level": level_pct(p.tank_height_cm, p.distance_cm, p.full_offset_cm), "tds": p.tds_ppm, "turb": p.turbidity_ntu}
     r["valid"] = r["level"] is not None
-    READINGS.append(r)
-    return {**r, "alerts_triggered": evaluate(r)}
+    db.readings.insert_one(dict(r))  # copy: insert_one adds _id to the dict it receives
+    return {**with_iso(r), "alerts_triggered": evaluate(r)}
 
 
 @app.get("/api/hostels/{hostel_id}/readings")
-def list_readings(hostel_id: str, limit: int = 500):
-    return [r for r in READINGS if r["hostel_id"] == hostel_id][-limit:]
+def list_readings(hostel_id: str, limit: int = 5000, user: dict = Depends(current_user)):
+    rows = db.readings.find({"hostel_id": hostel_id}, {"_id": 0}).sort("ts", -1).limit(min(limit, 50000))
+    return [with_iso(x) for x in rows][::-1]  # oldest first
 
 
 @app.get("/api/alerts")
-def alerts(limit: int = 100):
-    return ALERT_LOG[-limit:]
+def alerts(limit: int = 100, user: dict = Depends(current_user)):
+    return [with_iso(x) for x in db.alerts.find({}, {"_id": 0}).sort("ts", -1).limit(min(limit, 1000))]
 
 
 @app.post("/api/hostels/{hostel_id}/notify-students")
-def notify_students(hostel_id: str):
+def notify_students(hostel_id: str, user: dict = Depends(current_user)):
     if time.time() - LAST_STUDENT_SMS.get(hostel_id, 0) < 600:
         raise HTTPException(429, "A student notice was already sent in the last 10 minutes. Try again later.")
     to = [p for p in load_people() if p["active"] and p["type"] == "student" and p["hostelId"] == hostel_id and {"lowLevel", "conservation"} & set(p["alerts"])]
@@ -230,5 +193,5 @@ def notify_students(hostel_id: str):
     if sent:
         LAST_STUDENT_SMS[hostel_id] = time.time()
     for p, (ok, detail) in zip(to, results):
-        ALERT_LOG.append({"ts": datetime.now(timezone.utc).isoformat(), "hostel_id": hostel_id, "kind": "student_notice", "recipient": p["name"], "ok": ok, "detail": detail})
+        db.alerts.insert_one({"ts": datetime.now(timezone.utc), "hostel_id": hostel_id, "kind": "student_notice", "recipient": p["name"], "ok": ok, "detail": detail, "sent_by": user["email"]})
     return {"provider": PROVIDER, "total": len(to), "sent": sent, "failed": len(to) - sent}
