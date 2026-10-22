@@ -177,7 +177,7 @@
 //   );
 // }
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Droplets, Cloud, Gauge, Download } from 'lucide-react';
 import { PARAMS, TANK } from '../config.js';
 import {
@@ -192,19 +192,53 @@ import SensorCard from '../components/SensorCard.jsx';
 import WaterCalendar from '../components/WaterCalendar.jsx';
 import DailyReadingsModal from '../components/DailyReadingsModal.jsx';
 import TrendChart from '../components/TrendChart.jsx';
-import { getESP32Readings,saveReading, } from '../esp32Service.js';
-import { useRef } from 'react';
+import { getESP32Readings, saveReading, getStoredReadings } from '../esp32Service.js';
 
 export default function Overview({ hostel }) {
-  // const lastSavedRef = useRef(0);
   const lastSavedRef = useRef(
-  Number(localStorage.getItem(`lastSaved_${hostel.id}`)) || 0
-);
+    Number(localStorage.getItem(`lastSaved_${hostel.id}`)) || 0
+  );
   const [readings, setReadings] = useState([]);
   const [connectionStatus, setConnectionStatus] = useState('Connecting');
+  const [historicalLoaded, setHistoricalLoaded] = useState(false);
+
+  // Load historical readings from backend on mount
+  useEffect(() => {
+    async function loadHistoricalData() {
+      try {
+        const storedReadings = await getStoredReadings(hostel.id);
+        console.log(`Loaded ${storedReadings.length} historical readings from backend`);
+
+        // Convert backend format to frontend format
+        const converted = storedReadings.map(r => ({
+          ts: new Date(r.ts).getTime(),
+          level: r.level,
+          turb: r.turb,
+          tds: r.tds,
+          turbidityADC: r.turbidity_adc,
+          turbidityVoltage: r.turbidity_voltage,
+          tdsADC: r.tds_adc,
+          tdsVoltage: r.tds_voltage,
+          valid: r.valid ?? true,
+          quality: 'unknown',
+        }));
+
+        setReadings(converted);
+        setHistoricalLoaded(true);
+      } catch (error) {
+        console.error('Failed to load historical data:', error);
+        // Continue anyway - will show live data only
+        setHistoricalLoaded(true);
+      }
+    }
+
+    loadHistoricalData();
+  }, [hostel.id]);
 
   // Fetch live readings from ESP32
   useEffect(() => {
+    if (!historicalLoaded) return; // Wait for historical data to load first
+
     let active = true;
 
 //     async function fetchReadings() {
@@ -299,7 +333,10 @@ async function fetchReadings() {
       quality: 'unknown',
     };
 
-    setReadings((previous) => [...previous, reading].slice(-100));
+    setReadings((previous) => {
+      // Add new reading and keep last 1000 total
+      return [...previous, reading].slice(-1000);
+    });
     setConnectionStatus('Connected');
 
     // Save the first reading immediately, then every 5 minutes.
@@ -320,18 +357,16 @@ async function fetchReadings() {
           turbidity_voltage: data.turbidityVoltage,
         });
 
-        // lastSavedRef.current = Date.now();
-        // console.log('Reading saved to database.');
         lastSavedRef.current = Date.now();
 
-localStorage.setItem(
-  `lastSaved_${hostel.id}`,
-  String(lastSavedRef.current)
-);
+        localStorage.setItem(
+          `lastSaved_${hostel.id}`,
+          String(lastSavedRef.current)
+        );
 
-console.log('Reading saved to database.');
+        console.log('✓ Reading saved to database at', new Date().toLocaleTimeString());
       } catch (saveError) {
-        console.error('Failed to save reading to database:', saveError);
+        console.error('✗ Failed to save reading to database:', saveError);
       }
     }
   } catch (error) {
@@ -353,7 +388,7 @@ console.log('Reading saved to database.');
       active = false;
       clearInterval(timer);
     };
-  }, []);
+  }, [historicalLoaded, hostel.id]); // Re-run when historical data loads or hostel changes
 
   const [sel, setSel] = useState(null);
   const [open, setOpen] = useState(false);
