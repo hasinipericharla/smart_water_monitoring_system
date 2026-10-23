@@ -436,9 +436,9 @@ export default function TrendChart({ hostel, readings }) {
               </button>
             ))}
           </div>
-          <button className="btn" onClick={download} disabled={!rows.length}>
+          {/* <button className="btn" onClick={download} disabled={!rows.length}>
             <Download size={16} /> Download
-          </button>
+          </button> */}
         </div>
       </div>
 
