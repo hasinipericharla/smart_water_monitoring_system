@@ -1,4 +1,5 @@
 
+
 // import { useEffect, useMemo, useState } from 'react';
 // import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, ReferenceLine } from 'recharts';
 // import { Download } from 'lucide-react';
@@ -16,6 +17,24 @@
 // const BUCKET = 5 * 60 * 1000;        // one chart point every 5 minutes
 // const IST_OFFSET = 330 * 60 * 1000;  // so axis ticks land on IST clock times
 
+// // Return the first non-empty value among the possible field names, as a number
+// const pick = (r, keys) => {
+//   for (const k of keys) {
+//     if (r[k] != null && r[k] !== '') return Number(r[k]);
+//   }
+//   return null;
+// };
+
+// // Make database rows and live rows use the same field names
+// const normalize = (r) => ({
+//   ...r,
+//   ts: typeof r.ts === 'number' ? r.ts : new Date(r.ts).getTime(),
+//   level: pick(r, ['level', 'waterLevel', 'water_level']),
+//   tds: pick(r, ['tds', 'TDS', 'tdsValue']),
+//   turb: pick(r, ['turb', 'turbidity', 'Turbidity', 'ntu']),
+//   valid: r.valid ?? true, // DB rows may not have a `valid` field
+// });
+
 // export default function TrendChart({ hostel, readings }) {
 //   const [storedReadings, setStoredReadings] = useState([]);
 //   const [historyError, setHistoryError] = useState('');
@@ -29,15 +48,12 @@
 //         const result = await getStoredReadings(hostel.id);
 //         const list = Array.isArray(result) ? result : result.readings ?? [];
 
+//         // Debug: check the real field names coming from the database (remove when done)
+//         console.log('DB sample:', list[0]);
+
 //         if (!active) return;
 
-//         setStoredReadings(
-//           list.map((r) => ({
-//             ...r,
-//             ts: typeof r.ts === 'number' ? r.ts : new Date(r.ts).getTime(),
-//             valid: r.valid ?? true, // DB rows may not have a `valid` field
-//           }))
-//         );
+//         setStoredReadings(list.map(normalize));
 //         setHistoryError('');
 //       } catch (error) {
 //         console.error('Failed to load database history:', error);
@@ -80,7 +96,10 @@
 //       // Merge database + live readings, remove duplicates, keep only the selected range
 //       const rows = Array.from(
 //         new Map(
-//           [...storedReadings, ...readings].map((r) => [`${r.ts}-${r.level}-${r.tds}-${r.turb}`, r])
+//           [...storedReadings, ...readings.map(normalize)].map((r) => [
+//             `${r.ts}-${r.level}-${r.tds}-${r.turb}`,
+//             r,
+//           ])
 //         ).values()
 //       )
 //         .sort((x, y) => x.ts - y.ts)
@@ -89,7 +108,7 @@
 //       // Group into 5-minute buckets (average of valid values)
 //       const buckets = new Map();
 //       for (const r of rows) {
-//         if (!r.valid || r[param] == null) continue;
+//         if (r.valid === false || r[param] == null || Number.isNaN(r[param])) continue;
 //         const key = Math.floor(r.ts / BUCKET) * BUCKET;
 //         const bk = buckets.get(key) ?? { sum: 0, n: 0 };
 //         bk.sum += Number(r[param]);
@@ -159,9 +178,9 @@
 //               </button>
 //             ))}
 //           </div>
-//           <button className="btn" onClick={download} disabled={!rows.length}>
+//           {/* <button className="btn" onClick={download} disabled={!rows.length}>
 //             <Download size={16} /> Download
-//           </button>
+//           </button> */}
 //         </div>
 //       </div>
 
@@ -293,7 +312,7 @@ const normalize = (r) => ({
   valid: r.valid ?? true, // DB rows may not have a `valid` field
 });
 
-export default function TrendChart({ hostel, readings }) {
+export default function TrendChart({ hostel, readings, actions }) {
   const [storedReadings, setStoredReadings] = useState([]);
   const [historyError, setHistoryError] = useState('');
 
@@ -436,9 +455,7 @@ export default function TrendChart({ hostel, readings }) {
               </button>
             ))}
           </div>
-          {/* <button className="btn" onClick={download} disabled={!rows.length}>
-            <Download size={16} /> Download
-          </button> */}
+          {actions}
         </div>
       </div>
 

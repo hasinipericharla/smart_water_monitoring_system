@@ -5,7 +5,7 @@ import { PARAMS, TANK } from '../config.js';
 import { getReadings } from '../utils/mockData.js';
 import { groupByDay, stats } from '../utils/calculations.js';
 import { addDays, dayKey, fmtDate, mondayOf, WEEKDAYS } from '../utils/dateUtils.js';
-import { downloadCSV, downloadPDF } from '../utils/exportUtils.js';
+import { downloadCSV } from '../utils/exportUtils.js';
 
 export default function WeeklyReport({ hostel }) {
   const readings = getReadings(hostel.id), byDay = groupByDay(readings);
@@ -22,18 +22,36 @@ export default function WeeklyReport({ hostel }) {
   const week = stats(all, param);
   const label = `${fmtDate(weekStart)} – ${fmtDate(addDays(weekStart, 6))}`;
   const thisMon = mondayOf(new Date());
-  const preset = dayKey(weekStart) === dayKey(thisMon) ? 'cur' : dayKey(weekStart) === dayKey(addDays(thisMon, -7)) ? 'prev' : 'custom';
+  const preset = dayKey(weekStart) === dayKey(thisMon) ? 'cur' : 'prev';
 
-  const csv = () => downloadCSV(`${hostel.id}_weekly_${dayKey(weekStart)}.csv`, [
-    ['hostel', 'tank', 'date', 'weekday', 'parameter', 'unit', 'daily_avg', 'min', 'max', 'valid_readings'],
-    ...days.flatMap((d) => Object.entries(PARAMS).map(([k, m]) => { const s = d.future ? null : stats(byDay[d.k] || [], k); return [hostel.id, TANK.id, d.k, d.full, m.label, m.unit, s?.avg.toFixed(2) ?? 'No data', s?.min ?? '', s?.max ?? '', s?.n ?? 0]; })),
-  ]);
-  const pdf = () => downloadPDF(`${hostel.id}_weekly_${dayKey(weekStart)}.pdf`, `Weekly report – ${hostel.id}`, [
-    `Hostel: ${hostel.id} · Tank: ${TANK.id}`, `Week (Mon–Sun): ${label}`, 'Data source: SIMULATED readings (prototype)', `Generated: ${new Date().toLocaleString()}`, '',
-    ...Object.entries(PARAMS).flatMap(([k, m]) => { const w = stats(all, k); return [`${m.label} (${m.unit}) – ${w ? `week avg ${w.avg.toFixed(2)}, min ${w.min}, max ${w.max}, ${w.n} readings` : 'No data'}`,
-      ...days.map((d) => { const s = d.future ? null : stats(byDay[d.k] || [], k); return `   ${d.full}: ${s ? s.avg.toFixed(2) : 'No data'}`; })]; }),
-    '', `Days with data: ${days.filter((d) => d.s).length} of 7 (chart for the selected parameter is available in the app).`,
-  ]);
+  // CSV: daily averages for the selected week (same logic as the Overview CSV).
+  const csv = () => {
+    const avg = (rows, key) => {
+      const s = stats(rows, key);
+      return s ? Number(s.avg.toFixed(PARAMS[key].dec + 1)) : 'No data';
+    };
+
+    const dailyRows = days
+      .filter((d) => !d.future && byDay[d.k])
+      .map((d) => {
+        const rows = byDay[d.k];
+        const validCount = rows.filter((r) => r.valid).length;
+        return [
+          hostel.id,
+          TANK.id,
+          d.k,
+          avg(rows, 'level'),
+          avg(rows, 'turb'),
+          avg(rows, 'tds'),
+          validCount,
+        ];
+      });
+
+    downloadCSV(`${hostel.id}_weekly_${dayKey(weekStart)}.csv`, [
+      ['hostel', 'tank', 'date', 'water_level', 'turbidity', 'tds', 'valid_readings'],
+      ...dailyRows,
+    ]);
+  };
 
   const tip = ({ active, payload }) => { if (!active || !payload?.length) return null; const d = payload[0].payload;
     return <div className="tip"><b>{d.full}</b><div>{d.v == null ? 'No data' : `${d.v} ${meta.unit}`}</div>{d.s && <div className="muted small">{d.s.n} readings</div>}</div>; };
@@ -48,10 +66,9 @@ export default function WeeklyReport({ hostel }) {
             <button className={preset === 'cur' ? 'on' : ''} onClick={() => setWeekStart(thisMon)}>Current week</button>
             <button className={preset === 'prev' ? 'on' : ''} onClick={() => setWeekStart(addDays(thisMon, -7))}>Previous week</button>
           </div>
-          <label className="inline">Pick any day <input type="date" max={today} value={dayKey(weekStart)} onChange={(e) => e.target.value && setWeekStart(mondayOf(new Date(e.target.value + 'T00:00:00')))} /></label>
           <div className="row">
             <div className="seg"><button className={view === 'bar' ? 'on' : ''} onClick={() => setView('bar')}>Bar</button><button className={view === 'line' ? 'on' : ''} onClick={() => setView('line')}>Line</button></div>
-            <button className="btn" onClick={csv}><Download size={16} /> CSV</button><button className="btn" onClick={pdf}><Download size={16} /> PDF</button>
+            <button className="btn" onClick={csv}><Download size={16} /> CSV</button>
           </div>
         </div>
         <h3>{meta.label} – daily average ({meta.unit})</h3>

@@ -7,7 +7,7 @@ import WeeklyReport from './WeeklyReport.jsx';
 const NAV = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'alerts', label: 'Whom to Send Alerts', icon: BellRing },
-  { id: 'weekly', label: 'Weekly Report in Bar Graph', icon: BarChart3 },
+  { id: 'weekly', label: 'Weekly Report', icon: BarChart3 },
 ];
 
 export default function DashboardLayout({ user, hostel, onChangeHostel, onLogout }) {
