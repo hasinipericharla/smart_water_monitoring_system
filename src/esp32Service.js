@@ -16,7 +16,7 @@
 import { getToken } from './utils/auth.js';
 
 const ESP32_URL = 'http://10.49.101.124';
-const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8001';
+const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
 export async function getESP32Readings() {
 const response = await fetch(`${ESP32_URL}/data`, {
