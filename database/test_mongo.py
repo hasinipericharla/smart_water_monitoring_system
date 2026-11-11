@@ -1,16 +1,49 @@
+# # # from pymongo import MongoClient
+# # # import certifi, os
+
+# # # url = os.environ["MONGO_URL"]
+# # # c = MongoClient(url, tlsCAFile=certifi.where(), serverSelectionTimeoutMS=5000)
+# # # print(c.admin.command("ping"))
+
+# # from pathlib import Path
+# # from dotenv import load_dotenv
+# # from pymongo import MongoClient
+# # import certifi, os
+
+# # load_dotenv(Path(__file__).resolve().parent.parent / "backend" / ".env")
+# # url = os.environ["MONGO_URL"]
+# # c = MongoClient(url, tlsCAFile=certifi.where(), serverSelectionTimeoutMS=5000)
+# # print(c.admin.command("ping"))
+
+# import os
 # from pymongo import MongoClient
-# import certifi, os
+# from dotenv import load_dotenv
 
-# url = os.environ["MONGO_URL"]
-# c = MongoClient(url, tlsCAFile=certifi.where(), serverSelectionTimeoutMS=5000)
-# print(c.admin.command("ping"))
+# load_dotenv()
 
-from pathlib import Path
-from dotenv import load_dotenv
-from pymongo import MongoClient
-import certifi, os
+# MONGO_URI = os.getenv("MONGO_URI")
 
-load_dotenv(Path(__file__).resolve().parent.parent / "backend" / ".env")
-url = os.environ["MONGO_URL"]
-c = MongoClient(url, tlsCAFile=certifi.where(), serverSelectionTimeoutMS=5000)
-print(c.admin.command("ping"))
+# client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10000)
+
+# try:
+#     client.admin.command("ping")
+#     print("MongoDB connected successfully!")
+
+#     db = client["WaterMonitoring"]
+#     collection = db["readings"]
+
+# except Exception as e:
+#     print("MongoDB connection failed:", e)
+
+from db import client, db
+
+try:
+    client.admin.command("ping")
+    print("MongoDB connected successfully!")
+    print("Database name:", db.name)
+
+except Exception as e:
+    print("MongoDB connection failed:", e)
+
+finally:
+    client.close()
