@@ -1,4 +1,4 @@
-# """Signup with email OTP, login, and JWT sessions. Users are stored in MongoDB."""
+
 # import hashlib, hmac, os, secrets, smtplib, ssl, time
 # from datetime import datetime, timedelta, timezone
 # from email.message import EmailMessage
@@ -22,6 +22,7 @@
 # ALLOWED_DOMAIN = os.getenv("ALLOWED_EMAIL_DOMAIN", "").lower().lstrip("@")  # e.g. college.edu ; empty = any email
 # EMAIL_RE = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 # FAILS: dict[str, list[float]] = {}  # failed logins per email (in memory)
+# RESET_MESSAGE = "If this email is registered, a reset code has been sent. Check your inbox (and the spam folder)."
 
 
 # class Signup(BaseModel):
@@ -43,6 +44,12 @@
 # class Login(BaseModel):
 #     email: str = Field(pattern=EMAIL_RE)
 #     password: str = Field(min_length=1, max_length=72)
+
+
+# class ResetPassword(BaseModel):
+#     email: str = Field(pattern=EMAIL_RE)
+#     otp: str = Field(pattern=r"^\d{6}$")
+#     password: str = Field(min_length=8, max_length=72)
 
 
 # def now() -> datetime:
@@ -77,6 +84,11 @@
 # def mail_otp(email: str, name: str, otp: str):
 #     send_email(email, "Your Smart Water Monitoring verification code",
 #                f"Hello {name},\n\nYour verification code is {otp}.\nIt expires in {OTP_MINUTES} minutes.\n\nIf you did not sign up, ignore this email.")
+
+
+# def mail_reset(email: str, name: str, otp: str):
+#     send_email(email, "Your Smart Water Monitoring password reset code",
+#                f"Hello {name},\n\nYour password reset code is {otp}.\nIt expires in {OTP_MINUTES} minutes.\n\nIf you did not ask to reset your password, ignore this email. Your password will not change.")
 
 
 # def session(u: dict) -> dict:
@@ -148,6 +160,49 @@
 #     return session(user)
 
 
+# @router.post("/forgot-password")
+# def forgot_password(b: EmailOnly):
+#     """Email a 6-digit reset code. Always returns the same message, so nobody can probe which emails are registered."""
+#     email = b.email.lower()
+#     u = db.users.find_one({"email": email})
+#     if not u or not u.get("active", True):
+#         return {"message": RESET_MESSAGE}
+#     old = db.resets.find_one({"_id": email})
+#     if old and old["resendAt"] > now():
+#         return {"message": RESET_MESSAGE}  # still in the cooldown: don't send another email
+#     otp = f"{secrets.randbelow(10**6):06d}"
+#     db.resets.replace_one({"_id": email}, {
+#         "_id": email, "otpHash": otp_hash(email, otp), "tries": 0,
+#         "resendAt": now() + timedelta(seconds=RESEND_SECONDS), "expiresAt": now() + timedelta(minutes=OTP_MINUTES)}, upsert=True)
+#     try:
+#         mail_reset(email, u["name"], otp)
+#     except Exception as e:
+#         db.resets.delete_one({"_id": email})
+#         print(f"[EMAIL ERROR] {type(e).__name__}: {e}")
+#     return {"message": RESET_MESSAGE}
+
+
+# @router.post("/reset-password")
+# def reset_password(b: ResetPassword):
+#     email = b.email.lower()
+#     bad = "The code is incorrect or has expired. Request a new code."
+#     r = db.resets.find_one({"_id": email})
+#     if not r or r["expiresAt"] < now():
+#         raise HTTPException(400, bad)
+#     if r["tries"] >= OTP_MAX_TRIES:
+#         db.resets.delete_one({"_id": email})
+#         raise HTTPException(429, "Too many wrong codes. Request a new code.")
+#     if not hmac.compare_digest(r["otpHash"], otp_hash(email, b.otp)):
+#         db.resets.update_one({"_id": email}, {"$inc": {"tries": 1}})
+#         raise HTTPException(400, bad)
+#     res = db.users.update_one({"email": email, "active": {"$ne": False}}, {"$set": {"pwHash": hash_pw(b.password)}})
+#     db.resets.delete_one({"_id": email})
+#     if res.matched_count == 0:
+#         raise HTTPException(400, bad)
+#     FAILS.pop(email, None)  # clear any login lockout
+#     return {"message": "Password updated. Log in with your new password."}
+
+
 # @router.post("/login")
 # def login(b: Login):
 #     email = b.email.lower()
@@ -174,7 +229,7 @@
 #     if not u or not u.get("active", True):
 #         raise HTTPException(401, "Account not found or disabled.")
 #     return u
-"""Signup with email OTP, login, password reset, and JWT sessions. Users are stored in MongoDB."""
+
 import hashlib, hmac, os, secrets, smtplib, ssl, time
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
@@ -185,7 +240,10 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 from pymongo.errors import DuplicateKeyError
 
-from db import db
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parent.parent))  # lets backend import the sibling database/ package
+from database.db import db
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 

@@ -4,6 +4,7 @@
 # SMS provider is chosen by env var SMS_PROVIDER: console (default, test only) | circuitdigest | fast2sms | twilio."""
 # import asyncio
 # import os
+# import threading
 # import time
 # from contextlib import asynccontextmanager
 # from datetime import datetime, timezone
@@ -31,6 +32,11 @@
 # HOSTEL_IDS = ["LH1", "LH2", "LH3", "LH4", "MH1", "MH2", "MH3", "MH4", "MH5", "MH6", "MH7"]
 # OFFLINE_MINUTES = 60  # no reading for this long -> "sensor offline" alert
 # OFFLINE_CHECK_SECONDS = 300  # how often the watchdog runs
+
+# # Circuit Digest allows only one SMS per ~7.5 seconds: space the calls out.
+# _cd_lock = threading.Lock()
+# _cd_last_call = 0.0
+# CD_MIN_GAP = 8.0
 
 
 # # ---------------------------------------------------------------------------
@@ -102,6 +108,7 @@
 
 # def send_sms(phone: str, text: str) -> tuple[bool, str]:
 #     """Send an SMS with the provider selected by SMS_PROVIDER."""
+#     global _cd_last_call
 #     digits = "".join(c for c in phone if c.isdigit())
 
 #     if PROVIDER == "circuitdigest":
@@ -153,13 +160,21 @@
 #         }
 
 #         try:
-#             response = requests.post(
-#                 url,
-#                 params={"ID": template_id},
-#                 headers=headers,
-#                 json=payload,
-#                 timeout=15,
-#             )
+#             with _cd_lock:  # one request at a time, spaced CD_MIN_GAP apart
+#                 for _attempt in range(2):  # retry once if rate-limited
+#                     wait = CD_MIN_GAP - (time.time() - _cd_last_call)
+#                     if wait > 0:
+#                         time.sleep(wait)
+#                     response = requests.post(
+#                         url,
+#                         params={"ID": template_id},
+#                         headers=headers,
+#                         json=payload,
+#                         timeout=15,
+#                     )
+#                     _cd_last_call = time.time()
+#                     if response.status_code != 429:
+#                         break
 
 #             if not response.ok:
 #                 return (
@@ -173,16 +188,10 @@
 #             except ValueError:
 #                 return False, "Circuit Digest returned an invalid response"
 
-#             # if body.get("status") == "error":
-#             #     return False, str(body)[:200]
+#             if body.get("status") == "error":
+#                 return False, str(body)[:200]
 
-#             # return True, str(body)[:200]
-#             if body.get("status") != "success":
-#                 return False, f"Circuit Digest rejected request: {body}"
-
-#             return True, f"Circuit Digest response: {body}"
-
-
+#             return True, str(body)[:200]
 
 #         except Exception as error:
 #             return False, f"{type(error).__name__}: {str(error)[:200]}"
@@ -407,52 +416,19 @@
 
 # @app.post("/api/hostels/{hostel_id}/notify-students")
 # def notify_students(hostel_id: str, user: dict = Depends(current_user)):
-    
+#     if time.time() - LAST_STUDENT_SMS.get(hostel_id, 0) < 600:
+#         raise HTTPException(429, "A student notice was already sent in the last 10 minutes. Try again later.")
 #     to = [p for p in load_people() if p["active"] and p["type"] == "student" and p["hostelId"] == hostel_id and {"lowLevel", "conservation"} & set(p["alerts"])]
 #     if not to:
 #         raise HTTPException(404, "No active students with low-water or conservation alerts enabled for this hostel.")
 #     text = f"Water Conservation Notice: The water level in your hostel ({hostel_id}) tank is low, so please use water moderately and avoid wastage until the supply returns to normal."
-#     # results = [send_sms(p["phone"], text) for p in to]
-#     # sent = sum(ok for ok, _ in results)
-#     results = []
-
-#     for i, p in enumerate(to):
-#       ok, detail = send_sms(p["phone"], text)
-#       results.append((ok, detail))
-
-#     print(
-#         f"[STUDENT SMS] Recipient: {p['name']} | "
-#         f"Success: {ok} | Provider response: {detail}"
-#     )
-
-#     if i < len(to) - 1:
-#         time.sleep(10)
-
+#     results = [send_sms(p["phone"], text) for p in to]
 #     sent = sum(ok for ok, _ in results)
 #     if sent:
 #         LAST_STUDENT_SMS[hostel_id] = time.time()
 #     for p, (ok, detail) in zip(to, results):
-#       print(
-#         f"[STUDENT SMS] Recipient: {p['name']} | "
-#         f"Success: {ok} | Provider response: {detail}"
-#     )
-
-#     db.alerts.insert_one({
-#         "ts": datetime.now(timezone.utc),
-#         "hostel_id": hostel_id,
-#         "kind": "student_notice",
-#         "recipient": p["name"],
-#         "ok": ok,
-#         "detail": detail,
-#         "sent_by": user["email"]
-#     })
-
-#     return {
-#     "provider": PROVIDER,
-#     "total": len(to),
-#     "sent": sent,
-#     "failed": len(to) - sent
-# }
+#         db.alerts.insert_one({"ts": datetime.now(timezone.utc), "hostel_id": hostel_id, "kind": "student_notice", "recipient": p["name"], "ok": ok, "detail": detail, "sent_by": user["email"]})
+#     return {"provider": PROVIDER, "total": len(to), "sent": sent, "failed": len(to) - sent}
 
 """Smart Water Monitoring API. Data (users, readings, recipients, alerts) is stored in MongoDB.
 SMS provider is chosen by env var SMS_PROVIDER: console (default, test only) | circuitdigest | fast2sms | twilio."""
@@ -468,7 +444,10 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from db import db, init_indexes  # db.py loads backend/.env
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parent.parent))  # lets backend import the sibling database/ package
+from database.db import db, init_indexes  # database/db.py loads backend/.env
 from auth import current_user, router as auth_router
 
 
